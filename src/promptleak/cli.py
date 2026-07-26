@@ -1,4 +1,4 @@
-"""Click-based CLI interface for PromptLeak v3.0.0."""
+"""Click-based CLI interface for PromptLeak v5.0.0."""
 import asyncio
 import json
 import os
@@ -73,6 +73,27 @@ from .utils.logger import setup_logger, console
 @click.option("--grid-role", default="master", type=click.Choice(["master", "worker"]), help="Grid node role")
 @click.option("--grid-redis", default="redis://localhost:6379/0", help="Redis URL for grid coordination")
 @click.option("--grid-max-workers", default=10, type=int, help="Max workers for grid master")
+@click.option("--inject", is_flag=True, help="Run prompt injection sandbox tests")
+@click.option("--inject-test", default=None, type=click.Choice(["json", "text"]), help="Output format for injection test results")
+@click.option("--compare", is_flag=True, help="Compare two prompt files")
+@click.option("--compare-file-a", default=None, type=click.Path(exists=True), help="First prompt file for comparison")
+@click.option("--compare-file-b", default=None, type=click.Path(exists=True), help="Second prompt file for comparison")
+@click.option("--label-a", default="Prompt A", help="Label for first prompt in comparison")
+@click.option("--label-b", default="Prompt B", help="Label for second prompt in comparison")
+@click.option("--report-type", default="standard", type=click.Choice(["standard", "professional"]), help="Report type")
+@click.option("--report-company", default="PromptLeak Security", help="Company name on professional report")
+@click.option("--report-assessor", default="Automated Assessment", help="Assessor name on report")
+@click.option("--report-logo", default="", help="Logo URL for report cover")
+@click.option("--obfuscate", is_flag=True, help="Obfuscate a prompt file")
+@click.option("--obfuscate-file", default=None, type=click.Path(exists=True), help="Prompt file to obfuscate")
+@click.option("--obfuscate-strategy", default=None, help="Single obfuscation strategy to apply")
+@click.option("--obfuscate-all", is_flag=True, help="Generate all obfuscation variants")
+@click.option("--judge", default=None, type=click.Choice(["extraction_quality", "hardening_effectiveness", "injection_severity", "prompt_quality"]), help="LLM-as-Judge evaluation type")
+@click.option("--judge-extracted-file", default=None, type=click.Path(exists=True), help="Extracted prompt file for judge")
+@click.option("--judge-response-file", default=None, type=click.Path(exists=True), help="Raw response file for judge")
+@click.option("--waf-test", is_flag=True, help="Test target for prompt injection WAF")
+@click.option("--shell", is_flag=True, help="Start interactive injection shell")
+@click.option("--shell-with", default=None, help="Initial injection payload for shell")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
 @click.pass_context
 def main(
@@ -133,6 +154,27 @@ def main(
     grid_role: str,
     grid_redis: str,
     grid_max_workers: int,
+    inject: bool,
+    inject_test: Optional[str],
+    compare: bool,
+    compare_file_a: Optional[str],
+    compare_file_b: Optional[str],
+    label_a: str,
+    label_b: str,
+    report_type: str,
+    report_company: str,
+    report_assessor: str,
+    report_logo: str,
+    obfuscate: bool,
+    obfuscate_file: Optional[str],
+    obfuscate_strategy: Optional[str],
+    obfuscate_all: bool,
+    judge: Optional[str],
+    judge_extracted_file: Optional[str],
+    judge_response_file: Optional[str],
+    waf_test: bool,
+    shell: bool,
+    shell_with: Optional[str],
     verbose: bool,
 ):
     """Extract system prompts from AI chat applications.
@@ -184,9 +226,21 @@ def main(
         asyncio.run(_run_grid(grid_role, grid_redis, grid_max_workers, verbose))
         return
 
+    if compare:
+        asyncio.run(_run_compare(compare_file_a, compare_file_b, label_a, label_b, output, verbose))
+        return
+
+    if obfuscate or obfuscate_file:
+        _run_obfuscate(obfuscate_file, obfuscate_strategy, obfuscate_all, output, verbose)
+        return
+
+    if judge:
+        asyncio.run(_run_judge(judge, judge_extracted_file, judge_response_file, ai_provider, ai_model, ai_key, ai_base_url, verbose))
+        return
+
     mode_count = sum(1 for x in [url, hunt, batch] if x)
     if mode_count == 0:
-        console.print("[red]Error: Provide a URL, --hunt QUERY, --batch FILE, --web, --proxy-mode, --test-prompt, --schedule, --monitor, or --grid[/]")
+        console.print("[red]Error: Provide a URL, --hunt QUERY, --batch FILE, --web, --proxy-mode, --test-prompt, --schedule, --monitor, --grid, --compare, --obfuscate, or --judge[/]")
         sys.exit(1)
     if mode_count > 1:
         console.print("[red]Error: URL, --hunt, and --batch are mutually exclusive[/]")
@@ -201,6 +255,21 @@ def main(
         console.print(f"[bold cyan]PromptLeak[/] batch mode: [bold]{batch}[/]")
         asyncio.run(_run_batch(batch, output, output_format, headed, proxy, no_cache, screenshot, timeout,
                                fingerprint, verbose))
+        return
+
+    if inject:
+        console.print(f"[bold cyan]PromptLeak[/] injection sandbox: [bold]{url}[/]")
+        asyncio.run(_run_inject(url, headed, proxy, inject_test, verbose))
+        return
+
+    if waf_test:
+        console.print(f"[bold cyan]PromptLeak[/] WAF test: [bold]{url}[/]")
+        asyncio.run(_run_waf_test(url, headed, proxy, verbose))
+        return
+
+    if shell:
+        console.print(f"[bold cyan]PromptLeak[/] injection shell: [bold]{url}[/]")
+        asyncio.run(_run_shell(url, headed, proxy, shell_with, verbose))
         return
 
     technique_list = [t.strip() for t in techniques.split(",") if t.strip()] if techniques else []
@@ -244,6 +313,27 @@ def main(
         grid_role=grid_role,
         grid_redis=grid_redis,
         grid_max_workers=grid_max_workers,
+        inject=inject,
+        inject_test=inject_test,
+        compare=compare,
+        compare_file_a=compare_file_a,
+        compare_file_b=compare_file_b,
+        compare_label_a=label_a,
+        compare_label_b=label_b,
+        report_type=report_type,
+        report_company=report_company,
+        report_assessor=report_assessor,
+        report_logo=report_logo,
+        obfuscate=obfuscate,
+        obfuscate_file=obfuscate_file,
+        obfuscate_strategy=obfuscate_strategy,
+        obfuscate_all=obfuscate_all,
+        judge=judge,
+        judge_extracted_file=judge_extracted_file,
+        judge_response_file=judge_response_file,
+        waf_test=waf_test,
+        shell=shell,
+        shell_with=shell_with,
     )
 
     engine = ExtractionEngine(config)
@@ -379,6 +469,21 @@ def main(
         except Exception as e:
             if verbose:
                 console.print(f"[yellow]Intel tracker skipped: {e}[/]")
+
+    # Professional report generation
+    if report_type == "professional" and output:
+        try:
+            from .output.professional_report import ProfessionalReportGenerator
+            prg = ProfessionalReportGenerator(
+                company_name=report_company,
+                assessor=report_assessor,
+                logo_url=report_logo,
+            )
+            prg.generate(report_dict, output_path=output)
+            console.print(f"[green]Professional report written to {output}[/]")
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Professional report failed: {e}[/]")
 
     if not output:
         console.print("\n[bold]=== EXTRACTION REPORT ===[/]")
@@ -843,6 +948,127 @@ def _conf_color(conf: float) -> str:
     if conf >= 0.7: return "#3fb950"
     if conf >= 0.3: return "#d29922"
     return "#f85149"
+
+
+async def _run_compare(file_a: Optional[str], file_b: Optional[str], label_a: str, label_b: str, output: Optional[str], verbose: bool):
+    if not file_a or not file_b:
+        console.print("[red]Error: --compare requires --compare-file-a and --compare-file-b[/]")
+        sys.exit(1)
+    from .analysis.comparison import PromptComparator
+    with open(file_a, "r", encoding="utf-8") as f:
+        text_a = f.read()
+    with open(file_b, "r", encoding="utf-8") as f:
+        text_b = f.read()
+    pc = PromptComparator()
+    results = pc.compare(text_a, text_b, label_a=label_a, label_b=label_b)
+    report = pc.format_report(results)
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(report)
+    console.print(report)
+
+
+def _run_obfuscate(obfuscate_file: Optional[str], strategy: Optional[str], all_variants: bool, output: Optional[str], verbose: bool):
+    if not obfuscate_file:
+        console.print("[red]Error: --obfuscate requires --obfuscate-file[/]")
+        sys.exit(1)
+    from .offense.obfuscator import PromptObfuscator
+    with open(obfuscate_file, "r", encoding="utf-8") as f:
+        prompt = f.read()
+    po = PromptObfuscator()
+    if all_variants:
+        variants = po.obfuscate_all(prompt)
+        report = po.format_variants(variants)
+    elif strategy:
+        result = po.obfuscate(prompt, strategy=strategy)
+        report = f"Strategy: {strategy}\nObfuscated:\n{result.get('obfuscated', 'ERROR')}"
+    else:
+        result = po.obfuscate(prompt, strategy="token_smuggling")
+        report = f"Strategy: token_smuggling\nObfuscated:\n{result.get('obfuscated', 'ERROR')}"
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(report)
+    console.print(report)
+
+
+async def _run_judge(eval_type: str, extracted_file: Optional[str], response_file: Optional[str],
+                     provider: str, model: str, api_key: Optional[str], base_url: Optional[str], verbose: bool):
+    from .analysis.judge import LLMJudge
+    extracted = ""
+    response = ""
+    if extracted_file:
+        with open(extracted_file, "r", encoding="utf-8") as f:
+            extracted = f.read()
+    if response_file:
+        with open(response_file, "r", encoding="utf-8") as f:
+            response = f.read()
+    judge = LLMJudge(provider=provider or "openai", model=model or "gpt-4o-mini", api_key=api_key, base_url=base_url)
+    kwargs = {"extracted_text": extracted, "response": response, "technique": "unknown", "target_description": "AI Assistant"}
+    if eval_type == "extraction_quality":
+        kwargs = {"extracted_text": extracted, "response": response, "technique": "unknown", "target_description": "AI Assistant"}
+    elif eval_type == "hardening_effectiveness":
+        kwargs = {"original_prompt": extracted, "hardened_prompt": extracted, "extraction_response": response, "technique": "unknown"}
+    elif eval_type == "injection_severity":
+        kwargs = {"target_description": "AI Assistant", "payload": extracted[:500], "response": response[:500], "expected_behavior": "Normal operation"}
+    elif eval_type == "prompt_quality":
+        kwargs = {"prompt": extracted or response}
+    result = await judge.evaluate(eval_type, **kwargs)
+    console.print(judge.format_evaluation(result))
+
+
+async def _run_inject(url: str, headed: bool, proxy: Optional[str], inject_test: Optional[str], verbose: bool):
+    from .core.browser import BrowserManager
+    from .targets.registry import detect_target
+    from .injection.sandbox import InjectionSandbox
+    target = detect_target(url)
+    async with BrowserManager(headed=headed, proxy=proxy) as bm:
+        page = await bm.new_page()
+        try:
+            await page.goto(url, wait_until="load", timeout=120000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        await target.pre_navigation_hook(page)
+        sandbox = InjectionSandbox()
+        results = await sandbox.run_all_tests(page, target)
+        report = sandbox.format_results(results)
+        console.print(report)
+
+
+async def _run_waf_test(url: str, headed: bool, proxy: Optional[str], verbose: bool):
+    from .core.browser import BrowserManager
+    from .targets.registry import detect_target
+    from .injection.waf_tester import WAFTester
+    target = detect_target(url)
+    async with BrowserManager(headed=headed, proxy=proxy) as bm:
+        page = await bm.new_page()
+        try:
+            await page.goto(url, wait_until="load", timeout=120000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        await target.pre_navigation_hook(page)
+        wt = WAFTester()
+        results = await wt.run_tests(page, target)
+        report = wt.format_results(results)
+        console.print(report)
+
+
+async def _run_shell(url: str, headed: bool, proxy: Optional[str], shell_with: Optional[str], verbose: bool):
+    from .core.browser import BrowserManager
+    from .targets.registry import detect_target
+    from .injection.shell import InjectionShell
+    target = detect_target(url)
+    async with BrowserManager(headed=headed, proxy=proxy) as bm:
+        page = await bm.new_page()
+        try:
+            await page.goto(url, wait_until="load", timeout=120000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        await target.pre_navigation_hook(page)
+        shell = InjectionShell(page, target, injection_payload=shell_with or "")
+        await shell.start()
 
 
 if __name__ == "__main__":
