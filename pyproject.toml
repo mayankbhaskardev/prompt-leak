@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt-leak"
+version = "0.1.0"
+description = "Extract hidden system prompts from any AI chat application"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Mayank Bhaskar", email = "mayankbhaskardev@gmail.com" },
+]
+keywords = ["security", "osint", "prompt-injection", "llm", "red-team"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
+
+dependencies = [
+    "playwright>=1.40.0",
+    "aiohttp>=3.9.0",
+    "beautifulsoup4>=4.12.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/mayankbhaskardev/prompt-leak"
+"Repository" = "https://github.com/mayankbhaskardev/prompt-leak"
+"Bug Tracker" = "https://github.com/mayankbhaskardev/prompt-leak/issues"
+
+[project.scripts]
+promptextract = "promptleak.cli:main"
+pleak = "promptleak.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.html
+*.json
+*.md
+!gallery/*.md
+.pytest_cache/
+claimer_state.json
+hits.txt
+playwright-report/
+test-results/
