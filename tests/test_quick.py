@@ -452,8 +452,8 @@ assert len(variants) >= 10, f"Expected >=10 variants, got {len(variants)}"
 assert "token_smuggling" in variants
 assert "encoding_chain" in variants
 assert "zero_width_injection" in variants
-single = po.obfuscate("Test prompt", strategy="case_alternation")
-assert single["strategy"] == "case_alternation"
+single = po.obfuscate("Test prompt", strategy="token_smuggling")
+assert single["strategy"] == "token_smuggling"
 assert "obfuscated" in single
 print(f"  PromptObfuscator: OK ({len(variants)} variants)")
 
@@ -473,15 +473,15 @@ print()
 print("=== V5.0.0 Feature 6: WAF Tester ===")
 from promptleak.injection.waf_tester import WAFTester
 wt = WAFTester()
-assert len(wt.BENIGN_TESTS) >= 7, f"Expected >=7 benign tests, got {len(wt.BENIGN_TESTS)}"
-assert len(wt.MALICIOUS_TESTS) >= 5, f"Expected >=5 malicious categories, got {len(wt.MALICIOUS_TESTS)}"
+assert len(wt.BENIGN_PROBES) >= 7, f"Expected >=7 benign tests, got {len(wt.BENIGN_PROBES)}"
+assert len(wt.MALICIOUS_PROBES) >= 5, f"Expected >=5 malicious categories, got {len(wt.MALICIOUS_PROBES)}"
 analysis = wt._analyze_results(
     [{"payload": "hi", "response": "hello", "blocked": False} for _ in range(7)],
     {"direct_injection": [{"payload": "bad", "response": "I cannot", "blocked": True, "executed": False} for _ in range(3)]},
 )
 assert "waf_status" in analysis
 assert "false_positive_rate" in analysis
-print(f"  WAFTester: OK (benign={len(wt.BENIGN_TESTS)}, malicious_cats={len(wt.MALICIOUS_TESTS)})")
+print(f"  WAFTester: OK (benign={len(wt.BENIGN_PROBES)}, malicious_cats={len(wt.MALICIOUS_PROBES)})")
 
 print()
 print("=== V5.0.0 Feature 7: Injection Shell ===")
