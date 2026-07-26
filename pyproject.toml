@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompt-leak"
-version = "3.0.0"
+version = "4.0.0"
 description = "Extract hidden system prompts from any AI chat application"
 readme = "README.md"
 license = { text = "MIT" }
@@ -47,6 +47,8 @@ all = [
     "openai>=1.0.0",
     "anthropic>=0.30.0",
 ]
+grid = ["redis>=5.0.0"]
+vision = ["Pillow>=10.0.0"]
 
 [project.urls]
 "Homepage" = "https://github.com/mayankbhaskardev/prompt-leak"

@@ -53,6 +53,26 @@ from .utils.logger import setup_logger, console
 @click.option("--proxy-mode", is_flag=True, help="Start MITM proxy to capture prompts from any traffic")
 @click.option("--proxy-port", default=8080, type=int, help="Port for MITM proxy (default: 8080)")
 @click.option("--proxy-output", default="./captures", type=click.Path(), help="Output directory for proxy captures")
+@click.option("--chain", is_flag=True, help="Enable multi-turn conversation chain extraction")
+@click.option("--chain-strategy", default="auto", type=click.Choice(["auto", "trust_escalation", "authority_cascade", "fragment_assembly", "philosophical_trap", "emotional_manipulation"]), help="Conversation chain strategy")
+@click.option("--max-turns", default=5, type=int, help="Max turns for conversation chain")
+@click.option("--token-probe", is_flag=True, help="Run token-level probe analysis")
+@click.option("--harden", is_flag=True, help="Harden a leaked prompt against future extraction")
+@click.option("--harden-output", default=None, type=click.Path(), help="Output file for hardened prompt")
+@click.option("--track", is_flag=True, help="Track prompt changes with IntelTracker")
+@click.option("--intel-db", default=None, type=click.Path(), help="Intel database path (default: ~/.promptleak/intel.db)")
+@click.option("--intel-report", default=None, type=click.Path(), help="Export intel report to file")
+@click.option("--intel-timeline", default=None, type=click.Path(), help="Export intel timeline to file")
+@click.option("--intel-leaderboard", default=None, type=click.Path(), help="Export intel leaderboard to file")
+@click.option("--vision-probe", is_flag=True, help="Scan page for image-based prompt leakage")
+@click.option("--monitor", is_flag=True, help="Start real-time monitor mode")
+@click.option("--monitor-file", default=None, type=click.Path(exists=True), help="File with targets for monitor mode")
+@click.option("--monitor-interval", default=300, type=int, help="Monitor scan interval in seconds")
+@click.option("--monitor-notify", default=None, help="Notification config for monitor (type:url)")
+@click.option("--grid", is_flag=True, help="Enable distributed grid mode")
+@click.option("--grid-role", default="master", type=click.Choice(["master", "worker"]), help="Grid node role")
+@click.option("--grid-redis", default="redis://localhost:6379/0", help="Redis URL for grid coordination")
+@click.option("--grid-max-workers", default=10, type=int, help="Max workers for grid master")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
 @click.pass_context
 def main(
@@ -93,6 +113,26 @@ def main(
     proxy_mode: bool,
     proxy_port: int,
     proxy_output: str,
+    chain: bool,
+    chain_strategy: str,
+    max_turns: int,
+    token_probe: bool,
+    harden: bool,
+    harden_output: Optional[str],
+    track: bool,
+    intel_db: Optional[str],
+    intel_report: Optional[str],
+    intel_timeline: Optional[str],
+    intel_leaderboard: Optional[str],
+    vision_probe: bool,
+    monitor: bool,
+    monitor_file: Optional[str],
+    monitor_interval: int,
+    monitor_notify: Optional[str],
+    grid: bool,
+    grid_role: str,
+    grid_redis: str,
+    grid_max_workers: int,
     verbose: bool,
 ):
     """Extract system prompts from AI chat applications.
@@ -136,9 +176,17 @@ def main(
         _run_scheduler(schedule_file, interval, notify, plugins_dir, verbose)
         return
 
+    if monitor:
+        asyncio.run(_run_monitor(monitor_file, monitor_interval, monitor_notify, verbose))
+        return
+
+    if grid:
+        asyncio.run(_run_grid(grid_role, grid_redis, grid_max_workers, verbose))
+        return
+
     mode_count = sum(1 for x in [url, hunt, batch] if x)
     if mode_count == 0:
-        console.print("[red]Error: Provide a URL, --hunt QUERY, --batch FILE, --web, --proxy-mode, --test-prompt, or --schedule[/]")
+        console.print("[red]Error: Provide a URL, --hunt QUERY, --batch FILE, --web, --proxy-mode, --test-prompt, --schedule, --monitor, or --grid[/]")
         sys.exit(1)
     if mode_count > 1:
         console.print("[red]Error: URL, --hunt, and --batch are mutually exclusive[/]")
@@ -176,6 +224,26 @@ def main(
         fuzz=fuzz,
         fuzz_count=fuzz_count,
         fuzz_strategies=fuzz_strategies,
+        chain=chain,
+        chain_strategy=chain_strategy,
+        chain_max_turns=max_turns,
+        token_probe=token_probe,
+        harden=harden,
+        harden_output=harden_output,
+        track=track,
+        intel_db=intel_db,
+        intel_report=intel_report,
+        intel_timeline=intel_timeline,
+        intel_leaderboard=intel_leaderboard,
+        vision_probe=vision_probe,
+        monitor=monitor,
+        monitor_file=monitor_file,
+        monitor_interval=monitor_interval,
+        monitor_notify=monitor_notify,
+        grid_enabled=grid,
+        grid_role=grid_role,
+        grid_redis=grid_redis,
+        grid_max_workers=grid_max_workers,
     )
 
     engine = ExtractionEngine(config)
@@ -244,6 +312,73 @@ def main(
     # Share if requested
     if share:
         asyncio.run(_do_share(report_dict, share_method))
+
+    # Post-extraction: Token Probe analysis
+    if token_probe and report.best_result:
+        try:
+            from .core.token_probe import TokenProbe
+            tp = TokenProbe()
+            tp_report = tp.analyze(report.best_result)
+            report_dict["token_probe"] = tp_report
+            console.print(tp.format_report(tp_report))
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Token probe skipped: {e}[/]")
+
+    # Post-extraction: Prompt Hardener
+    if harden and report.best_result:
+        try:
+            from .core.hardener import PromptHardener
+            ph = PromptHardener()
+            hardened = ph.harden(report.best_result)
+            report_dict["hardened_prompt"] = hardened
+            if harden_output:
+                with open(harden_output, "w", encoding="utf-8") as f:
+                    f.write(ph.format_harden_report(hardened))
+                console.print(f"[green]Hardened prompt written to {harden_output}[/]")
+            else:
+                console.print(ph.format_harden_report(hardened))
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Hardener skipped: {e}[/]")
+
+    # Post-extraction: Intel Tracker
+    if track and report.best_result:
+        try:
+            from .core.intel_tracker import IntelTracker
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc
+            it = IntelTracker(db_path=intel_db)
+            it.record_scan(domain, url, report.best_result, report.confidence, ",".join(report.techniques_used))
+            console.print(f"[green]Intel tracked: {domain}[/]")
+            if intel_report:
+                try:
+                    it.export_intel_report(intel_report)
+                    console.print(f"[green]Intel report written to {intel_report}[/]")
+                except Exception as e:
+                    if verbose:
+                        console.print(f"[yellow]Intel report export: {e}[/]")
+            if intel_timeline:
+                try:
+                    tl = it.get_timeline(domain)
+                    with open(intel_timeline, "w", encoding="utf-8") as f:
+                        json.dump(tl, f, indent=2)
+                    console.print(f"[green]Intel timeline written to {intel_timeline}[/]")
+                except Exception as e:
+                    if verbose:
+                        console.print(f"[yellow]Intel timeline export: {e}[/]")
+            if intel_leaderboard:
+                try:
+                    lb = it.get_leaderboard("most_changes")
+                    with open(intel_leaderboard, "w", encoding="utf-8") as f:
+                        json.dump(lb, f, indent=2)
+                    console.print(f"[green]Intel leaderboard written to {intel_leaderboard}[/]")
+                except Exception as e:
+                    if verbose:
+                        console.print(f"[yellow]Intel leaderboard export: {e}[/]")
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Intel tracker skipped: {e}[/]")
 
     if not output:
         console.print("\n[bold]=== EXTRACTION REPORT ===[/]")
@@ -659,6 +794,52 @@ def _write_batch_index(reports: list[dict], output_dir: str):
 
 
 def _conf_color_batch(conf: float) -> str:
+    if conf >= 0.7: return "#3fb950"
+    if conf >= 0.3: return "#d29922"
+    return "#f85149"
+
+
+async def _run_monitor(monitor_file: Optional[str], interval: int, notify: Optional[str], verbose: bool):
+    from .core.monitor import RealtimeMonitor
+    from .core.notifications import NotificationManager
+
+    notifier = NotificationManager() if notify else None
+    monitor = RealtimeMonitor(notifier=notifier)
+
+    if monitor_file:
+        monitor.load_from_file(monitor_file)
+    else:
+        console.print("[red]Error: --monitor requires --monitor-file with target URLs[/]")
+        sys.exit(1)
+
+    if not monitor.targets:
+        console.print("[red]No targets loaded from monitor file[/]")
+        sys.exit(1)
+
+    console.print(f"[bold cyan]PromptLeak Monitor[/] watching {len(monitor.targets)} targets")
+    console.print(f"[dim]Interval: {interval}s per target[/]")
+    if notify:
+        console.print(f"[dim]Notifications: {notify}[/]")
+
+    await monitor.start()
+
+
+async def _run_grid(role: str, redis_url: str, max_workers: int, verbose: bool):
+    if role == "master":
+        from .grid.master import GridMaster
+        master = GridMaster(redis_url=redis_url, max_workers=max_workers)
+        console.print(f"[bold cyan]PromptLeak Grid Master[/] (max workers: {max_workers})")
+        console.print(f"[dim]Redis: {redis_url}[/]")
+        await master.start()
+    elif role == "worker":
+        from .grid.worker import GridWorker
+        worker = GridWorker(master_url=redis_url)
+        console.print(f"[bold cyan]PromptLeak Grid Worker[/] ({worker.worker_id})")
+        console.print(f"[dim]Redis: {redis_url}[/]")
+        await worker.start()
+
+
+def _conf_color(conf: float) -> str:
     if conf >= 0.7: return "#3fb950"
     if conf >= 0.3: return "#d29922"
     return "#f85149"
