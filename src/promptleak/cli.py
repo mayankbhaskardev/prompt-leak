@@ -1049,7 +1049,7 @@ async def _run_waf_test(url: str, headed: bool, proxy: Optional[str], verbose: b
         await asyncio.sleep(2)
         await target.pre_navigation_hook(page)
         wt = WAFTester()
-        results = await wt.run_tests(page, target)
+        results = await wt.test(page, target)
         report = wt.format_results(results)
         console.print(report)
 
@@ -1067,7 +1067,7 @@ async def _run_shell(url: str, headed: bool, proxy: Optional[str], shell_with: O
             pass
         await asyncio.sleep(2)
         await target.pre_navigation_hook(page)
-        shell = InjectionShell(page, target, injection_payload=shell_with or "")
+        shell = InjectionShell(page, target, injection_payload=shell_with)
         await shell.start()
 
 
