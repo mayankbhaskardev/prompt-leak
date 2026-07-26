@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussion
+    url: https://github.com/mayankbhaskardev/prompt-leak/discussions
+    about: Ask questions, share results, or discuss ideas
+  - name: Security Vulnerability
+    url: mailto:security@example.com
+    about: Report security vulnerabilities in prompt-leak itself (not target platforms)
