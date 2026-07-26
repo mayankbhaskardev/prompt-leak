@@ -3,10 +3,9 @@ name: Prompt Leak Test
 on:
   push:
     paths:
-      - '**/prompt*.py'
-      - '**/system_prompt*'
-      - '**/.env*'
       - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/**'
   pull_request:
   schedule:
     - cron: '0 0 * * 1'
@@ -22,21 +21,19 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2
 
-      - name: Install prompt-leak from source
+      - name: Install from source
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -e .
           playwright install chromium --with-deps
 
-      - name: Run smoke test
+      - name: Smoke test
         run: python tests/test_quick.py
 
-      - name: Run pytest
+      - name: Pytest
         run: |
           pip install pytest pytest-asyncio
           pytest tests/ -v --tb=short
