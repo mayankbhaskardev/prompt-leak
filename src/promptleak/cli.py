@@ -1,4 +1,4 @@
-"""Click-based CLI interface for PromptLeak."""
+"""Click-based CLI interface for PromptLeak v3.0.0."""
 import asyncio
 import json
 import os
@@ -16,7 +16,7 @@ from .output.gallery import add_to_gallery, list_gallery as list_gallery_entries
 from .utils.logger import setup_logger, console
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.argument("url", required=False)
 @click.option("-t", "--techniques", default="", help="Comma-separated techniques (default: all)")
 @click.option("-o", "--output", default=None, type=click.Path(), help="Output file path (default: stdout)")
@@ -31,8 +31,32 @@ from .utils.logger import setup_logger, console
 @click.option("--hunt", default=None, help="Auto-discovery search query (e.g. 'AI chatbot')")
 @click.option("--limit", default=20, type=int, help="Max targets for hunt mode (default: 20)")
 @click.option("--batch", default=None, type=click.Path(exists=True), help="File with URLs for batch mode")
+@click.option("--web", is_flag=True, help="Start the PromptLeak web UI server")
+@click.option("--plugins-dir", default=None, type=click.Path(), help="Custom plugins directory (default: ~/.promptleak/plugins/)")
+@click.option("--list-plugins", is_flag=True, help="List all loaded plugins and exit")
+@click.option("--schedule", is_flag=True, help="Run scheduled scans in foreground")
+@click.option("--schedule-file", default=None, type=click.Path(exists=True), help="JSON file with scheduled job definitions")
+@click.option("--interval", default=24, type=int, help="Scan interval in hours (for --schedule)")
+@click.option("--notify", default=None, help="Notification config as JSON or type:url (for --schedule)")
+@click.option("--ai-provider", default=None, help="LLM provider for AI payload generation (openai, anthropic, ollama)")
+@click.option("--ai-model", default=None, help="Model for AI payload generation (default: gpt-4o-mini)")
+@click.option("--ai-key", default=None, help="API key for AI payload generation provider")
+@click.option("--ai-base-url", default=None, help="Base URL for AI provider (e.g. Ollama: http://localhost:11434)")
+@click.option("--fuzz", is_flag=True, help="Enable prompt fuzzing (500+ mutations of base payloads)")
+@click.option("--fuzz-count", default=500, type=int, help="Max payloads for fuzzer (default: 500)")
+@click.option("--fuzz-strategies", default=None, help="Comma-separated fuzz strategies: case,punctuation,spacing,language,formatting,framing,injection,encoding")
+@click.option("--fingerprint", is_flag=True, help="Fingerprint the model behind the target")
+@click.option("--test-prompt", is_flag=True, help="Test a system prompt for vulnerabilities")
+@click.option("--prompt-file", default=None, type=click.Path(exists=True), help="File containing system prompt to test (for --test-prompt)")
+@click.option("--share", is_flag=True, help="Generate a shareable report link")
+@click.option("--share-method", default="file", type=click.Choice(["file", "dpaste", "transfer", "0x0"]), help="Share method (default: file)")
+@click.option("--proxy-mode", is_flag=True, help="Start MITM proxy to capture prompts from any traffic")
+@click.option("--proxy-port", default=8080, type=int, help="Port for MITM proxy (default: 8080)")
+@click.option("--proxy-output", default="./captures", type=click.Path(), help="Output directory for proxy captures")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+@click.pass_context
 def main(
+    ctx: click.Context,
     url: str,
     techniques: str,
     output: Optional[str],
@@ -47,27 +71,74 @@ def main(
     hunt: Optional[str],
     limit: int,
     batch: Optional[str],
+    web: bool,
+    plugins_dir: Optional[str],
+    list_plugins: bool,
+    schedule: bool,
+    schedule_file: Optional[str],
+    interval: int,
+    notify: Optional[str],
+    ai_provider: Optional[str],
+    ai_model: Optional[str],
+    ai_key: Optional[str],
+    ai_base_url: Optional[str],
+    fuzz: bool,
+    fuzz_count: int,
+    fuzz_strategies: Optional[str],
+    fingerprint: bool,
+    test_prompt: bool,
+    prompt_file: Optional[str],
+    share: bool,
+    share_method: str,
+    proxy_mode: bool,
+    proxy_port: int,
+    proxy_output: str,
     verbose: bool,
 ):
     """Extract system prompts from AI chat applications.
 
     URL is the target AI chat application URL (e.g. https://chat.openai.com).
+
+    For subcommands, use: pleak serve, pleak plugins, etc.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     setup_logger(verbose)
+
+    if list_plugins:
+        _list_plugins(plugins_dir)
+        return
+
+    if proxy_mode:
+        _start_proxy(proxy_port, proxy_output, verbose)
+        return
+
+    if test_prompt:
+        asyncio.run(_run_test_prompt(ai_provider, ai_model, ai_key, ai_base_url, prompt_file, output, output_format, verbose))
+        return
+
+    if web:
+        _start_web(verbose)
+        return
 
     if show_gallery:
         entries = list_gallery_entries()
         if not entries:
             console.print("[yellow]No gallery entries found[/]")
         else:
-            console.print(f"[bold cyan]Gallery ({len(entries)} entries)[/]")
+            console.print(f"[bold cyan]PromptLeak Gallery ({len(entries)} entries)[/]")
             for e in entries:
                 console.print(f"  {e['filename']}")
         return
 
+    if schedule or schedule_file:
+        _run_scheduler(schedule_file, interval, notify, plugins_dir, verbose)
+        return
+
     mode_count = sum(1 for x in [url, hunt, batch] if x)
     if mode_count == 0:
-        console.print("[red]Error: Provide a URL, --hunt QUERY, or --batch FILE[/]")
+        console.print("[red]Error: Provide a URL, --hunt QUERY, --batch FILE, --web, --proxy-mode, --test-prompt, or --schedule[/]")
         sys.exit(1)
     if mode_count > 1:
         console.print("[red]Error: URL, --hunt, and --batch are mutually exclusive[/]")
@@ -75,12 +146,13 @@ def main(
 
     if hunt:
         console.print(f"[bold cyan]PromptLeak[/] hunting for [bold]{hunt}[/] (limit: {limit})")
-        asyncio.run(_run_hunt(hunt, limit, output, output_format, verbose))
+        asyncio.run(_run_hunt(hunt, limit, output, output_format, fingerprint, verbose))
         return
 
     if batch:
         console.print(f"[bold cyan]PromptLeak[/] batch mode: [bold]{batch}[/]")
-        asyncio.run(_run_batch(batch, output, output_format, headed, proxy, no_cache, screenshot, timeout, verbose))
+        asyncio.run(_run_batch(batch, output, output_format, headed, proxy, no_cache, screenshot, timeout,
+                               fingerprint, verbose))
         return
 
     technique_list = [t.strip() for t in techniques.split(",") if t.strip()] if techniques else []
@@ -97,12 +169,23 @@ def main(
         timeout=timeout,
         gallery=gallery,
         verbose=verbose,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_key=ai_key,
+        ai_base_url=ai_base_url,
+        fuzz=fuzz,
+        fuzz_count=fuzz_count,
+        fuzz_strategies=fuzz_strategies,
     )
 
     engine = ExtractionEngine(config)
 
     console.print(f"[bold cyan]PromptLeak[/] targeting [bold]{url}[/]")
     console.print(f"[dim]Techniques: {', '.join(config.techniques) if config.techniques else 'all'}[/]")
+    if fuzz:
+        console.print(f"[dim]Fuzzing enabled: up to {fuzz_count} mutations[/]")
+    if fingerprint:
+        console.print(f"[dim]Model fingerprinting enabled[/]")
 
     try:
         report = asyncio.run(engine.run())
@@ -118,6 +201,33 @@ def main(
 
     report_dict = report.to_dict()
 
+    # Run model fingerprinting if requested
+    if fingerprint and report.best_result:
+        try:
+            from .core.fingerprinter import ModelFingerprinter
+            from .core.browser import BrowserManager as FBBrowser
+            async def do_fingerprint():
+                async with FBBrowser(headed=headed, proxy=proxy) as bm:
+                    page = await bm.new_page()
+                    try:
+                        await page.goto(url, wait_until="load", timeout=120000)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(2)
+                    target = __import__("promptleak.targets.registry", fromlist=["detect_target"]).detect_target(url)
+                    if hasattr(target, "pre_navigation_hook"):
+                        await target.pre_navigation_hook(page)
+                    fp = ModelFingerprinter()
+                    result = await fp.fingerprint(page, target)
+                    await bm.close_page(page)
+                    return result
+            fp_result = asyncio.run(do_fingerprint())
+            report_dict["fingerprint"] = fp_result
+            console.print(fp.format_result(fp_result))
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Fingerprinting skipped: {e}[/]")
+
     if gallery and report.best_result:
         domain = urlparse(url).netloc
         add_to_gallery(
@@ -131,6 +241,10 @@ def main(
 
     export_report(report_dict, fmt=output_format, path=output)
 
+    # Share if requested
+    if share:
+        asyncio.run(_do_share(report_dict, share_method))
+
     if not output:
         console.print("\n[bold]=== EXTRACTION REPORT ===[/]")
         console.print(f"Target: {url}")
@@ -140,8 +254,181 @@ def main(
         console.print(report.best_result if report.best_result else "[yellow]No prompt extracted[/]")
 
 
-async def _run_hunt(query: str, limit: int, output: Optional[str], output_format: str, verbose: bool):
-    hunter = Hunter(limit=limit)
+@main.command()
+def serve():
+    """Start the PromptLeak web UI server."""
+    _start_web(verbose=True)
+
+
+@main.command()
+@click.option("--plugins-dir", default=None, type=click.Path(), help="Plugins directory")
+def plugins(plugins_dir: Optional[str]):
+    """List all loaded plugins."""
+    _list_plugins(plugins_dir)
+
+
+@main.command()
+@click.option("--file", "schedule_file", type=click.Path(exists=True), help="JSON file with job definitions")
+@click.option("--interval", default=24, type=int, help="Scan interval in hours")
+@click.option("--notify", default=None, help="Notification config JSON or type:url")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+def schedule(file: Optional[str], interval: int, notify: Optional[str], verbose: bool):
+    """Run scheduled scans."""
+    _run_scheduler(file, interval, notify, None, verbose)
+
+
+@main.command()
+@click.option("--port", default=8080, type=int, help="Proxy port (default: 8080)")
+@click.option("--output", default="./captures", type=click.Path(), help="Output directory")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+def proxy(port: int, output: str, verbose: bool):
+    """Start MITM proxy mode."""
+    _start_proxy(port, output, verbose)
+
+
+@main.command()
+@click.option("--provider", default="openai", help="LLM provider")
+@click.option("--model", default="gpt-4o-mini", help="Model name")
+@click.option("--key", default=None, help="API key")
+@click.option("--base-url", default=None, help="Base URL for provider")
+@click.option("--prompt-file", default=None, type=click.Path(exists=True), help="System prompt file")
+@click.option("-o", "--output", default=None, type=click.Path(), help="Output file")
+@click.option("-f", "--format", "output_format", default="json", type=click.Choice(["json", "markdown", "html"]), help="Output format")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+def test_prompt(provider: str, model: str, key: Optional[str], base_url: Optional[str],
+                prompt_file: Optional[str], output: Optional[str], output_format: str, verbose: bool):
+    """Test a system prompt for extraction vulnerabilities."""
+    setup_logger(verbose)
+    asyncio.run(_run_test_prompt(provider, model, key, base_url, prompt_file, output, output_format, verbose))
+
+
+def _start_web(verbose: bool = False):
+    try:
+        import uvicorn
+        console.print("[bold cyan]Starting PromptLeak Web UI[/] on [bold]http://localhost:8420[/]")
+        uvicorn.run("promptleak.web.app:app", host="0.0.0.0", port=8420, log_level="info")
+    except ImportError:
+        console.print("[red]uvicorn is not installed. Run: pip install uvicorn[/]")
+        sys.exit(1)
+
+
+def _list_plugins(plugins_dir: Optional[str] = None):
+    from .plugins.loader import load_plugins, get_loaded_plugins
+    loaded = load_plugins(plugins_dir)
+    info = get_loaded_plugins()
+    console.print("[bold cyan]PromptLeak Plugins[/]")
+    console.print(f"  Techniques: {len(info['techniques'])}")
+    for t in info["techniques"]:
+        console.print(f"    - {t.name} ({t.__doc__ or 'No description'})")
+    console.print(f"  Targets: {len(info['targets'])}")
+    for t in info["targets"]:
+        console.print(f"    - {t.name} ({t.__doc__ or 'No description'})")
+    if not info["techniques"] and not info["targets"]:
+        console.print("  [yellow]No plugins found[/]")
+
+
+def _start_proxy(port: int, output_dir: str, verbose: bool):
+    try:
+        from .proxy.server import start_proxy
+        asyncio.run(start_proxy(output_dir=output_dir, port=port, verbose=verbose))
+    except ImportError as e:
+        if "mitmproxy" in str(e):
+            console.print("[red]mitmproxy is required. Install: pip install mitmproxy[/]")
+        else:
+            console.print(f"[red]Failed to start proxy: {e}[/]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Proxy error: {e}[/]")
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+        sys.exit(1)
+
+
+async def _run_test_prompt(provider: str, model: str, api_key: Optional[str], base_url: Optional[str],
+                           prompt_file: Optional[str], output: Optional[str], output_format: str, verbose: bool):
+    from .core.prompt_tester import PromptTester, format_security_report
+
+    if prompt_file:
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            system_prompt = f.read().strip()
+    elif not sys.stdin.isatty():
+        system_prompt = sys.stdin.read().strip()
+    else:
+        console.print("[yellow]Enter/paste your system prompt (Ctrl+D/Ctrl+Z to finish):[/]")
+        system_prompt = sys.stdin.read().strip()
+
+    if not system_prompt:
+        console.print("[red]No system prompt provided[/]")
+        sys.exit(1)
+
+    console.print(f"[bold cyan]Testing system prompt[/] ({len(system_prompt)} chars)")
+    console.print(f"[dim]Provider: {provider}, Model: {model}[/]")
+
+    tester = PromptTester(provider=provider, model=model, api_key=api_key, base_url=base_url)
+    report = await tester.test_prompt(system_prompt)
+
+    if output:
+        with open(output, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        console.print(f"[green]Report written to {output}[/]")
+
+    console.print(format_security_report(report))
+
+
+def _run_scheduler(schedule_file: Optional[str], interval: int, notify: Optional[str],
+                   plugins_dir: Optional[str], verbose: bool):
+    from .core.scheduler import ScanScheduler
+
+    notify_config = None
+    if notify:
+        try:
+            notify_config = json.loads(notify)
+        except (json.JSONDecodeError, TypeError):
+            if ":" in notify:
+                ntype, url = notify.split(":", 1)
+                notify_config = {"type": ntype, "url": url}
+            else:
+                notify_config = {"type": "discord", "url": notify}
+
+    scheduler = ScanScheduler(plugins_dir=plugins_dir)
+
+    if schedule_file:
+        count = scheduler.load_from_file(schedule_file)
+        console.print(f"[green]Loaded {count} jobs from {schedule_file}[/]")
+    else:
+        console.print("[yellow]No schedule file provided. Use --schedule-file jobs.json[/]")
+        return
+
+    if not scheduler.jobs:
+        console.print("[red]No jobs loaded[/]")
+        return
+
+    console.print(f"[bold cyan]PromptLeak Scheduler[/] running {len(scheduler.jobs)} jobs")
+    for job in scheduler.jobs:
+        console.print(f"  [{job.id}] {job.url} every {job.interval_hours}h")
+        if job.notify_config:
+            console.print(f"    Notify: {job.notify_config.get('type', 'webhook')}")
+
+    asyncio.run(scheduler.run())
+
+
+async def _do_share(report_dict: dict, method: str):
+    from .output.share import ReportSharer
+    sharer = ReportSharer(method=method)
+    try:
+        url = await sharer.share(report_dict, method=method)
+        if url:
+            console.print(f"[green]Report shared:[/] [bold blue]{url}[/]")
+        else:
+            console.print("[yellow]Report saved locally (upload failed)[/]")
+    except Exception as e:
+        console.print(f"[yellow]Share failed: {e}[/]")
+
+
+async def _run_hunt(query: str, limit: int, output: Optional[str], output_format: str,
+                    do_fingerprint: bool, verbose: bool):
+    hunter = Hunter(limit=limit, timeout=120)
     results = await hunter.hunt(query)
 
     leaked = [r for r in results if r.status == "LEAKED"]
@@ -165,7 +452,8 @@ async def _run_hunt(query: str, limit: int, output: Optional[str], output_format
 
 async def _run_batch(batch_file: str, output_dir: Optional[str], output_format: str,
                      headed: bool, proxy: Optional[str], no_cache: bool,
-                     screenshot: Optional[str], timeout: int, verbose: bool):
+                     screenshot: Optional[str], timeout: int,
+                     do_fingerprint: bool, verbose: bool):
     try:
         with open(batch_file, "r", encoding="utf-8-sig") as f:
             lines = f.readlines()
@@ -221,6 +509,27 @@ async def _run_batch(batch_file: str, output_dir: Optional[str], output_format: 
         try:
             report = await engine.run()
             report_dict = report.to_dict()
+
+            if do_fingerprint and report.best_result:
+                try:
+                    from .core.fingerprinter import ModelFingerprinter
+                    from .core.browser import BrowserManager as FBBrowser
+                    async with FBBrowser(headed=headed, proxy=proxy) as bm:
+                        fpage = await bm.new_page()
+                        try:
+                            await fpage.goto(target_url, wait_until="load", timeout=120000)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(2)
+                        target = __import__("promptleak.targets.registry", fromlist=["detect_target"]).detect_target(target_url)
+                        if hasattr(target, "pre_navigation_hook"):
+                            await target.pre_navigation_hook(fpage)
+                        fp = ModelFingerprinter()
+                        fpr = await fp.fingerprint(fpage, target)
+                        report_dict["fingerprint"] = fpr
+                        await bm.close_page(fpage)
+                except Exception:
+                    pass
 
             safe_domain = domain.replace(".", "_")
             js_path = os.path.join(output_dir, f"{safe_domain}.json")

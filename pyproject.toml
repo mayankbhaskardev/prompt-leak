@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prompt-leak"
-version = "0.1.0"
+version = "3.0.0"
 description = "Extract hidden system prompts from any AI chat application"
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,6 +32,20 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "rich>=13.7.0",
     "click>=8.1.0",
+    "uvicorn>=0.24.0",
+    "fastapi>=0.104.0",
+    "websockets>=12.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+proxy = ["mitmproxy>=10.0.0"]
+ai = ["openai>=1.0.0", "anthropic>=0.30.0"]
+web = ["uvicorn>=0.24.0", "websockets>=12.0"]
+all = [
+    "mitmproxy>=10.0.0",
+    "openai>=1.0.0",
+    "anthropic>=0.30.0",
 ]
 
 [project.urls]
@@ -42,6 +56,7 @@ dependencies = [
 [project.scripts]
 promptextract = "promptleak.cli:main"
 pleak = "promptleak.cli:main"
+pleak-serve = "promptleak.web.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
