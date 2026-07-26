@@ -1,4 +1,4 @@
-"""Prompt comparison engine — deep semantic, structural, and similarity analysis."""
+"""Prompt comparison engine — deep comparison across 7 analysis dimensions."""
 import difflib
 import json
 import logging
@@ -9,220 +9,217 @@ logger = logging.getLogger("promptleak")
 
 
 class PromptComparator:
-    """Compare two prompts across surface, structure, topics, tone, and semantics."""
+    """Compare two prompts across surface, structure, topics, tone, semantics, shared lines, and template."""
+
+    TOPICS = {
+        "safety": [r"(?i)(harmful|dangerous|illegal|unsafe|malicious|abuse)"],
+        "helpful": [r"(?i)(helpful|assist|support|guide|aid|help)"],
+        "refusal": [r"(?i)(refuse|decline|cannot|will\s*not|won't|against\s+(my|policy))"],
+        "identity": [r"(?i)(you\s+are|your\s+(role|purpose|mission|task|job)|you're\s+an?|act\s+as)"],
+        "coding": [r"(?i)(code|program|function|script|debug|implement|algorithm|syntax)"],
+        "creative": [r"(?i)(creative|write|story|poem|imagine|generate|compose)"],
+        "formatting": [r"(?i)(format|output|respond|reply|answer|use\s+the\s+following)"],
+        "language": [r"(?i)(language|english|french|spanish|translate|express)"],
+        "length": [r"(?i)(concise|brief|short|detailed|comprehensive|length|long|short)"],
+        "tone": [r"(?i)(tone|style|personality|voice|character|professional|friendly|casual)"],
+        "privacy": [r"(?i)(private|confidential|secret|personal|data|information\s+security)"],
+        "politics": [r"(?i)(political|opinion|biased|neutral|controversial)"],
+        "math": [r"(?i)(math|calculate|equation|solve|number|compute|numerical)"],
+        "reasoning": [r"(?i)(reason|think|step\s+by\s+step|explain|analyze|logical|critical)"],
+    }
 
     def __init__(self):
         self.results = {}
 
     def compare(self, prompt_a: str, prompt_b: str, label_a: str = "Prompt A", label_b: str = "Prompt B") -> dict:
-        """Run full comparison and return results."""
         self.results = {
-            "prompt_a": {"label": label_a, "text": prompt_a, "length": len(prompt_a)},
-            "prompt_b": {"label": label_b, "text": prompt_b, "length": len(prompt_b)},
-            "surface": self._analyze_surface(prompt_a, prompt_b),
-            "structure": self._analyze_structure(prompt_a, prompt_b),
-            "topics": self._analyze_topics(prompt_a, prompt_b),
-            "tone": self._analyze_tone(prompt_a, prompt_b),
-            "semantic": self._analyze_semantic(prompt_a, prompt_b),
-            "template_analysis": self._analyze_template(prompt_a, prompt_b),
-            "ngrams": self._analyze_ngrams(prompt_a, prompt_b),
-            "differences": self._find_differences(prompt_a, prompt_b),
+            "prompt_a": {"label": label_a, "text": prompt_a},
+            "prompt_b": {"label": label_b, "text": prompt_b},
+            "surface": self._surface_comparison(prompt_a, prompt_b),
+            "structure": self._structure_comparison(prompt_a, prompt_b),
+            "topics": self._topic_comparison(prompt_a, prompt_b),
+            "tone": self._tone_comparison(prompt_a, prompt_b),
+            "semantic": self._semantic_similarity(prompt_a, prompt_b),
+            "shared_lines": self._shared_lines(prompt_a, prompt_b),
+            "template_analysis": self._template_analysis(prompt_a, prompt_b),
         }
-        self.results["verdict"] = self._generate_verdict(self.results)
+        self.results["verdict"] = self._final_verdict(self.results)
         return self.results
 
-    def _analyze_surface(self, a: str, b: str) -> dict:
-        """Surface-level text similarity."""
+    def _surface_comparison(self, a: str, b: str) -> dict:
         matcher = difflib.SequenceMatcher(None, a, b)
-        ratio = matcher.ratio()
-        a_words = set(a.lower().split())
-        b_words = set(b.lower().split())
-        jaccard = len(a_words & b_words) / max(1, len(a_words | b_words))
         return {
-            "sequence_matcher": round(ratio, 4),
-            "jaccard_similarity": round(jaccard, 4),
-            "length_diff": abs(len(a) - len(b)),
-            "length_ratio": round(min(len(a), len(b)) / max(1, max(len(a), len(b))), 4),
+            "char_count_a": len(a),
+            "char_count_b": len(b),
             "word_count_a": len(a.split()),
             "word_count_b": len(b.split()),
+            "line_count_a": len(a.splitlines()),
+            "line_count_b": len(b.splitlines()),
+            "sentence_count_a": len(re.findall(r"[.!?]+", a)),
+            "sentence_count_b": len(re.findall(r"[.!?]+", b)),
+            "exact_match": a == b,
+            "sequence_matcher": round(matcher.ratio(), 4),
         }
 
-    def _analyze_structure(self, a: str, b: str) -> dict:
-        """Structural analysis — sections, line breaks, formatting."""
-        a_lines = [l.strip() for l in a.split("\n") if l.strip()]
-        b_lines = [l.strip() for l in b.split("\n") if l.strip()]
-        num_diff = abs(len(a_lines) - len(b_lines))
-        shared_lines = len(set(a_lines) & set(b_lines))
-        total_lines = max(1, len(set(a_lines) | set(b_lines)))
-        structure_match = shared_lines / total_lines
+    def _structure_comparison(self, a: str, b: str) -> dict:
+        def analyze(text):
+            return {
+                "has_numbered_list": bool(re.search(r"(?m)^\d+[\.\)]\s", text)),
+                "has_bullet_list": bool(re.search(r"(?m)^[\-\*\+]\s", text)),
+                "has_headers": bool(re.search(r"(?m)^#+\s|[A-Z][A-Z\s]+:$", text)),
+                "has_bold": bool(re.search(r"\*\*|__", text)),
+                "has_code_blocks": bool(re.search(r"```|`[^`]+`", text)),
+                "has_sections": bool(re.search(r"(?m)^(#{1,3}\s|(?:SECTION|PART|CHAPTER)\s)", text, re.I)),
+                "numbered_items": len(re.findall(r"(?m)^\d+[\.\)]\s", text)),
+                "bullet_items": len(re.findall(r"(?m)^[\-\*\+]\s", text)),
+                "headers": re.findall(r"(?m)^(?:#{1,3}\s(.+)|([A-Z][A-Z\s]+):)", text),
+                "paragraphs": [p for p in text.split("\n\n") if p.strip()],
+            }
 
-        a_sections = self._extract_sections(a)
-        b_sections = self._extract_sections(b)
-        shared_sections = len(set(a_sections) & set(b_sections))
-        total_sections = max(1, len(set(a_sections) | set(b_sections)))
+        sa = analyze(a)
+        sb = analyze(b)
+        bool_keys = ["has_numbered_list", "has_bullet_list", "has_headers", "has_bold", "has_code_blocks", "has_sections"]
+        matches = sum(1 for k in bool_keys if sa[k] == sb[k])
+        structure_match = matches / len(bool_keys) if bool_keys else 0
+
+        header_set_a = set(h for pair in sa["headers"] for h in pair if h)
+        header_set_b = set(h for pair in sb["headers"] for h in pair if h)
+        header_overlap = len(header_set_a & header_set_b) / max(1, len(header_set_a | header_set_b))
 
         return {
             "structure_match": round(structure_match, 4),
-            "line_count_diff": num_diff,
-            "shared_lines": shared_lines,
-            "unique_lines_a": len(a_lines) - shared_lines,
-            "unique_lines_b": len(b_lines) - shared_lines,
-            "shared_sections": shared_sections,
-            "section_overlap": round(shared_sections / total_sections, 4),
-            "section_count_a": len(a_sections),
-            "section_count_b": len(b_sections),
+            "a": {k: sa[k] for k in bool_keys + ["numbered_items", "bullet_items", "headers"]},
+            "b": {k: sb[k] for k in bool_keys + ["numbered_items", "bullet_items", "headers"]},
+            "header_overlap": round(header_overlap, 4),
+            "paragraph_count_diff": abs(len(sa["paragraphs"]) - len(sb["paragraphs"])),
         }
 
-    def _analyze_topics(self, a: str, b: str) -> dict:
-        """Topic overlap analysis."""
-        topics = {
-            "identity": r"(?i)(you are|your (role|purpose|mission|task|job))",
-            "safety": r"(?i)(harmful|dangerous|illegal|unsafe|malicious|abuse)",
-            "refusal": r"(?i)(refuse|decline|cannot|will not|against (my|policy))",
-            "helpfulness": r"(?i)(helpful|assist|support|guide|aid)",
-            "formatting": r"(?i)(format|output|respond|reply|answer)",
-            "personality": r"(?i)(personality|tone|style|voice|character)",
-            "knowledge": r"(?i)(knowledge|information|data|trained|training)",
-            "boundaries": r"(?i)(limit|boundary|scope|restriction|constraint)",
-            "honesty": r"(?i)(honest|truthful|accurate|factual|correct)",
-            "privacy": r"(?i)(privacy|private|confidential|secret|personal)",
-        }
-        a_topics = {t for t, p in topics.items() if re.search(p, a)}
-        b_topics = {t for t, p in topics.items() if re.search(p, b)}
-        overlap = a_topics & b_topics
-        union = a_topics | b_topics
+    def _topic_comparison(self, a: str, b: str) -> dict:
+        def topic_scores(text):
+            scores = {}
+            for topic, patterns in self.TOPICS.items():
+                matches = sum(1 for p in patterns if re.search(p, text))
+                scores[topic] = min(1.0, matches / len(patterns))
+            return scores
+
+        sa = topic_scores(a)
+        sb = topic_scores(b)
+        shared = {t for t in self.TOPICS if sa[t] > 0 and sb[t] > 0}
+        unique_a = {t for t in self.TOPICS if sa[t] > 0 and sb[t] == 0}
+        unique_b = {t for t in self.TOPICS if sb[t] > 0 and sa[t] == 0}
+        all_topics = {t for t in self.TOPICS if sa[t] > 0 or sb[t] > 0}
+
         return {
-            "topic_overlap": round(len(overlap) / max(1, len(union)), 4),
-            "topics_a": sorted(a_topics),
-            "topics_b": sorted(b_topics),
-            "shared_topics": sorted(overlap),
-            "unique_to_a": sorted(a_topics - b_topics),
-            "unique_to_b": sorted(b_topics - a_topics),
+            "topic_overlap": round(len(shared) / max(1, len(all_topics)), 4),
+            "shared_topics": sorted(shared),
+            "unique_to_a": sorted(unique_a),
+            "unique_to_b": sorted(unique_b),
+            "scores_a": sa,
+            "scores_b": sb,
         }
 
-    def _analyze_tone(self, a: str, b: str) -> dict:
-        """Tone analysis — imperative, prohibitive, etc."""
-        a_imperatives = len(re.findall(r"(?m)^\s*(Do|Don't|Always|Never|You must|You shall|You will)", a))
-        b_imperatives = len(re.findall(r"(?m)^\s*(Do|Don't|Always|Never|You must|You shall|You will)", b))
-        a_questions = a.count("?")
-        b_questions = b.count("?")
-        a_exclamations = a.count("!")
-        b_exclamations = b.count("!")
-        a_uppercase_ratio = sum(1 for c in a if c.isupper()) / max(1, len(a))
-        b_uppercase_ratio = sum(1 for c in b if c.isupper()) / max(1, len(b))
+    def _tone_comparison(self, a: str, b: str) -> dict:
+        def metrics(text):
+            words = text.split()
+            return {
+                "exclamation_count": text.count("!"),
+                "question_count": text.count("?"),
+                "imperative_count": len(re.findall(r"(?m)^\s*(Do|Don't|Always|Never|You must|You shall|You will|Please|Reply|Answer|Repeat|Output|Ignore|Act)", text, re.I)),
+                "first_person_count": len(re.findall(r"\b(I|me|my|we|our)\b", text, re.I)),
+                "second_person_count": len(re.findall(r"\b(you|your|yours)\b", text, re.I)),
+                "avg_sentence_length": round(len(words) / max(1, len(re.findall(r"[.!?]+", text))), 2),
+                "vocabulary_richness": round(len(set(w.lower() for w in words)) / max(1, len(words)), 4),
+            }
 
-        tone_diff = abs(a_imperatives - b_imperatives) + abs(a_questions - b_questions) + abs(a_exclamations - b_exclamations)
-        max_tone = max(a_imperatives + a_questions + a_exclamations, b_imperatives + b_questions + b_exclamations, 1)
-        tone_similarity = 1 - min(1.0, tone_diff / max_tone)
+        ma = metrics(a)
+        mb = metrics(b)
+        key_order = ["exclamation_count", "question_count", "imperative_count", "first_person_count", "second_person_count", "avg_sentence_length", "vocabulary_richness"]
+        ma_list = [ma[k] for k in key_order]
+        mb_list = [mb[k] for k in key_order]
+        tone_similarity = difflib.SequenceMatcher(None, ma_list, mb_list).ratio()
 
         return {
             "tone_similarity": round(tone_similarity, 4),
-            "imperatives_a": a_imperatives,
-            "imperatives_b": b_imperatives,
-            "questions_a": a_questions,
-            "questions_b": b_questions,
-            "exclamations_a": a_exclamations,
-            "exclamations_b": b_exclamations,
-            "uppercase_ratio_a": round(a_uppercase_ratio, 4),
-            "uppercase_ratio_b": round(b_uppercase_ratio, 4),
+            "a": ma,
+            "b": mb,
         }
 
-    def _analyze_semantic(self, a: str, b: str) -> dict:
-        """Semantic similarity using word embeddings comparison."""
+    def _semantic_similarity(self, a: str, b: str) -> dict:
         a_lower = a.lower()
         b_lower = b.lower()
-        a_words = set(re.findall(r"\b[a-z]+\b", a_lower))
-        b_words = set(re.findall(r"\b[a-z]+\b", b_lower))
-        common = a_words & b_words
-        all_words = a_words | b_words
-        if not all_words:
-            return {"weighted_average": 1.0, "common_words": 0, "total_unique": 0}
-        overlap_ratio = len(common) / len(all_words) if all_words else 0
+        a_words = a_lower.split()
+        b_words = b_lower.split()
 
-        role_words = {"you", "are", "your", "assistant", "ai", "model", "system", "chatbot", "agent"}
-        safety_words = {"harmful", "safe", "refuse", "decline", "illegal", "dangerous", "abuse"}
-        task_words = {"help", "answer", "respond", "output", "provide", "assist", "support"}
-        tone_words = {"please", "always", "never", "must", "shall", "friendly", "professional"}
-
-        def category_overlap(cat):
-            a_cat = len(a_words & cat)
-            b_cat = len(b_words & cat)
-            return min(a_cat, b_cat) / max(1, max(a_cat, b_cat))
-
-        role_sim = category_overlap(role_words)
-        safety_sim = category_overlap(safety_words)
-        task_sim = category_overlap(task_words)
-        tone_cat_sim = category_overlap(tone_words)
-        weighted = (overlap_ratio * 0.4 + role_sim * 0.2 + safety_sim * 0.15 + task_sim * 0.15 + tone_cat_sim * 0.1)
-
-        return {
-            "weighted_average": round(weighted, 4),
-            "overlap_ratio": round(overlap_ratio, 4),
-            "common_words": len(common),
-            "total_unique": len(all_words),
-            "role_similarity": round(role_sim, 4),
-            "safety_similarity": round(safety_sim, 4),
-            "task_similarity": round(task_sim, 4),
-            "tone_category_similarity": round(tone_cat_sim, 4),
-        }
-
-    def _analyze_template(self, a: str, b: str) -> dict:
-        """Template/skeleton analysis — check if prompts share a common template."""
-        a_skeleton = re.sub(r"\b\w+\b", "X", a)
-        b_skeleton = re.sub(r"\b\w+\b", "X", b)
-        skeleton_matcher = difflib.SequenceMatcher(None, a_skeleton, b_skeleton)
-        skeleton_ratio = skeleton_matcher.ratio()
-
-        a_punctuation = re.findall(r"[.!?:;,\-]", a)
-        b_punctuation = re.findall(r"[.!?:;,\-]", b)
-        punct_counter_a = Counter(a_punctuation)
-        punct_counter_b = Counter(b_punctuation)
-
-        return {
-            "skeleton_similarity": round(skeleton_ratio, 4),
-            "punctuation_dist_a": dict(punct_counter_a.most_common(10)),
-            "punctuation_dist_b": dict(punct_counter_b.most_common(10)),
-            "template_match": skeleton_ratio > 0.85,
-        }
-
-    def _analyze_ngrams(self, a: str, b: str) -> dict:
-        """N-gram overlap analysis."""
-        a_lower = a.lower()
-        b_lower = b.lower()
-
-        def ngrams(text, n):
-            words = text.split()
+        def ngram_set(words, n):
             return {" ".join(words[i:i+n]) for i in range(len(words)-n+1)}
 
-        results = {}
-        for n in [2, 3, 4]:
-            a_ng = ngrams(a_lower, n)
-            b_ng = ngrams(b_lower, n)
-            common = a_ng & b_ng
-            all_ng = a_ng | b_ng
-            overlap = len(common) / max(1, len(all_ng))
-            results[f"{n}_gram_overlap"] = round(overlap, 4)
-            results[f"{n}_gram_shared"] = len(common)
-            results[f"shared_{n}_grams"] = sorted(common)[:20]
-        return results
+        def jaccard(s1, s2):
+            return len(s1 & s2) / max(1, len(s1 | s2))
 
-    def _find_differences(self, a: str, b: str) -> list:
-        """Find specific differences between prompts."""
-        differ = list(difflib.unified_diff(
-            a.splitlines(keepends=True),
-            b.splitlines(keepends=True),
-            fromfile="Prompt A", tofile="Prompt B",
-        ))
-        return differ[:100]
+        unigram_a = set(a_words)
+        unigram_b = set(b_words)
+        bigram_a = ngram_set(a_words, 2)
+        bigram_b = ngram_set(b_words, 2)
+        trigram_a = ngram_set(a_words, 3)
+        trigram_b = ngram_set(b_words, 3)
 
-    def _extract_sections(self, text: str) -> list:
-        """Extract section headers from prompt."""
-        return re.findall(r"^([A-Z][A-Z\s]+):", text, re.MULTILINE) + \
-               re.findall(r"^## (.+)", text, re.MULTILINE) + \
-               re.findall(r"^\d+[\.\)]\s+(.+):", text, re.MULTILINE)
+        uni_overlap = jaccard(unigram_a, unigram_b)
+        bi_overlap = jaccard(bigram_a, bigram_b)
+        tri_overlap = jaccard(trigram_a, trigram_b)
+        weighted = uni_overlap * 0.2 + bi_overlap * 0.3 + tri_overlap * 0.5
 
-    def _generate_verdict(self, results: dict) -> dict:
-        """Generate overall comparison verdict."""
+        return {
+            "unigram_overlap": round(uni_overlap, 4),
+            "bigram_overlap": round(bi_overlap, 4),
+            "trigram_overlap": round(tri_overlap, 4),
+            "weighted_average": round(weighted, 4),
+        }
+
+    def _shared_lines(self, a: str, b: str) -> list:
+        a_lines = a.splitlines()
+        b_lines = b.splitlines()
+        b_line_map = {line.strip().lower(): i for i, line in enumerate(b_lines) if line.strip()}
+        shared = []
+        for i, line in enumerate(a_lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            key = stripped.lower()
+            if key in b_line_map:
+                shared.append({"line": stripped, "position_a": i, "position_b": b_line_map[key]})
+        if len(shared) > 50:
+            shared = shared[:50]
+        return shared
+
+    def _template_analysis(self, a: str, b: str) -> dict:
+        def normalize(text):
+            t = re.sub(r"\d+", "N", text)
+            t = re.sub(r"\b\w{8,}\b", "LONG", t)
+            t = re.sub(r"\"[^\"]*\"", "QUOTED", t)
+            t = re.sub(r"'[^']*'", "QUOTED", t)
+            return t
+
+        na = normalize(a)
+        nb = normalize(b)
+        skel_ratio = difflib.SequenceMatcher(None, na, nb).ratio()
+
+        if skel_ratio > 0.7:
+            classification = "SAME_TEMPLATE"
+        elif skel_ratio > 0.5:
+            classification = "SIMILAR_TEMPLATE"
+        elif skel_ratio > 0.3:
+            classification = "LOOSELY_RELATED"
+        else:
+            classification = "INDEPENDENT"
+
+        return {
+            "skeleton_similarity": round(skel_ratio, 4),
+            "normalized_a": na[:200],
+            "normalized_b": nb[:200],
+            "classification": classification,
+        }
+
+    def _final_verdict(self, results: dict) -> dict:
         scores = [
             results["surface"]["sequence_matcher"],
             results["structure"]["structure_match"],
@@ -234,20 +231,15 @@ class PromptComparator:
         overall = sum(scores) / len(scores)
 
         if overall > 0.85:
-            verdict = "NEAR_IDENTICAL"
-            color = "red"
+            verdict, color = "NEAR_IDENTICAL", "red"
         elif overall > 0.7:
-            verdict = "HIGHLY_SIMILAR"
-            color = "orange"
+            verdict, color = "HIGHLY_SIMILAR", "orange"
         elif overall > 0.5:
-            verdict = "MODERATELY_SIMILAR"
-            color = "yellow"
+            verdict, color = "MODERATELY_SIMILAR", "yellow"
         elif overall > 0.3:
-            verdict = "SOME_SIMILARITY"
-            color = "blue"
+            verdict, color = "SOME_SIMILARITY", "blue"
         else:
-            verdict = "DISTINCT"
-            color = "green"
+            verdict, color = "DISTINCT", "green"
 
         return {
             "overall_similarity": round(overall, 4),
@@ -264,7 +256,6 @@ class PromptComparator:
         }
 
     def format_report(self, results: dict) -> str:
-        """Format comparison results as readable report."""
         v = results.get("verdict", {})
         lines = []
         lines.append("PROMPT COMPARISON REPORT")
@@ -277,7 +268,9 @@ class PromptComparator:
             bar = "#" * int(score * 20) + " " * (20 - int(score * 20))
             lines.append(f"  {name:25s} {score*100:5.1f}% |{bar}|")
         lines.append("")
-        lines.append("DIFFERENCES:")
-        for diff in results.get("differences", [])[:20]:
-            lines.append(f"  {diff.rstrip()}")
+        shared = results.get("shared_lines", [])
+        if shared:
+            lines.append(f"SHARED LINES ({len(shared)}):")
+            for s in shared[:10]:
+                lines.append(f"  Line {s['position_a']}: \"{s['line'][:60]}\"")
         return "\n".join(lines)
