@@ -1,0 +1,118 @@
+name: 'Prompt Leak Scanner'
+description: 'Test your AI application for system prompt leakage vulnerabilities'
+author: 'mayankbhaskardev'
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  provider:
+    description: 'LLM provider to test against (openai, anthropic, ollama)'
+    required: false
+    default: 'openai'
+  model:
+    description: 'Model to test against'
+    required: false
+    default: 'gpt-4o-mini'
+  api-key:
+    description: 'API key for the LLM provider'
+    required: true
+  prompt-file:
+    description: 'Path to system prompt file to test'
+    required: true
+  prompt-text:
+    description: 'System prompt text to test (alternative to prompt-file)'
+    required: false
+    default: ''
+  fail-on-vulnerable:
+    description: 'Fail the workflow if vulnerabilities found'
+    required: false
+    default: 'true'
+  output-format:
+    description: 'Output format (json, html, markdown)'
+    required: false
+    default: 'json'
+
+outputs:
+  status:
+    description: 'Overall status (SECURE or VULNERABLE)'
+    value: ${{ steps.run-test.outputs.status }}
+  leaks-found:
+    description: 'Number of leaks found'
+    value: ${{ steps.run-test.outputs.leaks }}
+  leak-rate:
+    description: 'Percentage of tests that leaked'
+    value: ${{ steps.run-test.outputs.leak-rate }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install prompt-leak
+      shell: bash
+      run: pip install prompt-leak
+
+    - name: Determine prompt source
+      id: prompt-source
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.prompt-text }}" ]; then
+          echo "${{ inputs.prompt-text }}" > /tmp/prompt_to_test.txt
+          echo "source=text" >> $GITHUB_OUTPUT
+          echo "file=/tmp/prompt_to_test.txt" >> $GITHUB_OUTPUT
+        elif [ -n "${{ inputs.prompt-file }}" ]; then
+          echo "source=file" >> $GITHUB_OUTPUT
+          echo "file=${{ inputs.prompt-file }}" >> $GITHUB_OUTPUT
+        else
+          echo "Error: Either prompt-file or prompt-text must be provided"
+          exit 1
+        fi
+
+    - name: Run prompt security test
+      id: run-test
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+      run: |
+        OUTPUT_FILE="prompt_leak_report.json"
+        pleak --test-prompt \
+          --provider "${{ inputs.provider }}" \
+          --model "${{ inputs.model }}" \
+          --prompt-file "${{ steps.prompt-source.outputs.file }}" \
+          --output "$OUTPUT_FILE" \
+          --format "${{ inputs.output-format }}"
+
+        STATUS=$(python3 -c "import json; d=json.load(open('$OUTPUT_FILE')); print(d['overall_status'])")
+        LEAKS=$(python3 -c "import json; d=json.load(open('$OUTPUT_FILE')); print(d['leaks_found'])")
+        RATE=$(python3 -c "import json; d=json.load(open('$OUTPUT_FILE')); print(d['leak_rate'])")
+
+        echo "status=$STATUS" >> $GITHUB_OUTPUT
+        echo "leaks=$LEAKS" >> $GITHUB_OUTPUT
+        echo "leak-rate=$RATE" >> $GITHUB_OUTPUT
+
+        if [ "$STATUS" = "VULNERABLE" ]; then
+          echo "❌ PROMPT VULNERABLE: $LEAKS leaks found ($RATE%)"
+        else
+          echo "✅ PROMPT SECURE: No leaks detected"
+        fi
+
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      with:
+        name: prompt-leak-report
+        path: prompt_leak_report.*
+
+    - name: Fail if vulnerable
+      if: inputs.fail-on-vulnerable == 'true'
+      shell: bash
+      run: |
+        STATUS="${{ steps.run-test.outputs.status }}"
+        if [ "$STATUS" = "VULNERABLE" ]; then
+          echo "❌ Prompt security test FAILED — system prompt leaks detected!"
+          exit 1
+        fi
